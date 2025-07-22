@@ -1,0 +1,27 @@
+---
+- name: Check services status
+  hosts: "{{ hostname }}"
+  gather_facts: no
+  vars:
+    services: "{{ services.split(',') }}"
+  tasks:
+    - name: Check if services are running
+      ansible.builtin.service:
+        name: "{{ item }}"
+        state: started
+      register: service_status
+      loop: "{{ services }}"
+      failed_when: service_status.failed
+      ignore_errors: yes
+
+    - name: Log service status
+      ansible.builtin.debug:
+        msg: "Service {{ item.item }} is {{ 'running' if item.changed or item.state == 'started' else 'not running' }}"
+      loop: "{{ service_status.results }}"
+      when: service_status.results is defined
+
+    - name: Fail if any service is not running
+      ansible.builtin.fail:
+        msg: "Service {{ item.item }} is not running"
+      loop: "{{ service_status.results }}"
+      when: item.failed or item.state != 'started'

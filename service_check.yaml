@@ -1,0 +1,68 @@
+---
+- name: Check services status
+  hosts: "{{ hostname }}"
+  gather_facts: no
+  vars:
+    services: "{{ services.split(',') }}"
+  tasks:
+    - name: Check if services are running
+      ansible.builtin.service:
+        name: "{{ item.name }}"
+        state: started
+      register: service_status
+      loop: "{{ services }}"
+      retries: 3
+      delay: 10
+      failed_when: service_status.failed
+      ignore_errors: yes
+
+    - name: Check service health via HTTP
+      ansible.builtin.uri:
+        url: "http://{{ hostname }}:{{ item.port }}/health"
+        method: GET
+        status_code: 200
+      register: health_check
+      loop: "{{ services }}"
+      retries: 3
+      delay: 10
+      failed_when: health_check.status != 200
+      ignore_errors: yes
+      when: item.port is defined
+
+    - name: Log service status
+      ansible.builtin.debug:
+        msg: "Service {{ item.item.name }} is {{ 'running' if item.changed or item.state == 'started' else 'not running' }}"
+        verbosity: 1
+      loop: "{{ service_status.results }}"
+      when: service_status.results is defined
+
+    - name: Log detailed service status
+      ansible.builtin.debug:
+        var: service_status
+        verbosity: 2
+      when: service_status.results is defined
+
+    - name: Log health check results
+      ansible.builtin.debug:
+        msg: "Health check for {{ item.item.name }}: {{ 'healthy' if item.status == 200 else 'unhealthy' }}"
+        verbosity: 1
+      loop: "{{ health_check.results }}"
+      when: health_check.results is defined and item.item.port is defined
+
+    - name: Log detailed health check
+      ansible.builtin.debug:
+        var: health_check
+        verbosity: 2
+      when: health_check.results is defined
+
+    - name: Fail if any service is not running
+      ansible.builtin.fail:
+        msg: "Service {{ item.item.name }} is not running"
+      loop: "{{ service_status.results }}"
+      when: item.failed or item.state != 'started'
+
+    - name: Fail if any service is unhealthy
+      ansible.builtin.fail:
+        msg: "Health check failed for {{ item.item.name }}"
+      loop: "{{ health_check.results }}"
+      when: item.item.port is defined and item.status != 200
