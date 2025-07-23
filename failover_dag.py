@@ -18,7 +18,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Default arguments for the ligeramente
+# Default arguments for the DAG
 default_args = {
     'owner': 'airflow',
     'depends_on_past': False,
@@ -69,7 +69,7 @@ def run_ansible_playbook(task_type):
     try:
         logger.debug(f"Preparing {task_type} check for hostname: {HOSTNAME}")
         service_list = get_service_list()
-        service_list_str = ",".join(service_list)
+        service_list_str = ",".join([service['name'] for service in service_list])
         ansible_cmd = f"ansible-playbook {ANSIBLE_PLAYBOOK_PATH} -e 'services={service_list_str} hostname={HOSTNAME}' -vvv"
         
         logger.info(f"Executing Ansible command: {ansible_cmd}")
@@ -116,7 +116,7 @@ def simulate_failure(service):
         logger.error(f"stderr: {e.stderr}")
         raise AirflowException(f"Chaos test failed for {service}")
     except Exception as e:
-        logger.error(f"Unexpected error in chaos test for {service}: {str(e)} början
+        logger.error(f"Unexpected error in chaos test for {service}: {str(e)}", exc_info=True)
         raise AirflowException(f"Chaos test failed for {service}")
 
 def run_python_script(id, action_type, service_name, hostname):
@@ -195,9 +195,9 @@ with DAG(
     chaos_tasks = []
     for service in get_service_list():
         chaos = PythonOperator(
-            task_id=f'chaos_{service}',
+            task_id=f'chaos_{service["name"]}',
             python_callable=simulate_failure,
-            op_kwargs={'service': service},
+            op_kwargs={'service': service["name"]},
             execution_timeout=datetime.timedelta(minutes=5),
         )
         chaos_tasks.append(chaos)
@@ -228,19 +228,19 @@ with DAG(
     failover_alerts = []
     for service in get_service_list():
         failover = PythonOperator(
-            task_id=f'failover_{service}',
+            task_id=f'failover_{service["name"]}',
             python_callable=run_python_script,
             op_kwargs={
                 'id': FAILOVER_ID,
                 'action_type': ACTION_TYPE_FAILOVER,
-                'service_name': service,
+                'service_name': service["name"],
                 'hostname': HOSTNAME
             },
             execution_timeout=datetime.timedelta(minutes=10),
         )
         failover_alert = create_slack_alert(
-            f'failover_{service}',
-            f"Failover failed for {service} on {{ ds }} at {{ ts }}",
+            f'failover_{service["name"]}',
+            f"Failover failed for {service['name']} on {{ ds }} at {{ ts }}",
         )
         failover_tasks.append(failover)
         failover_alerts.append(failover_alert)
@@ -259,27 +259,27 @@ with DAG(
     rollback_tasks = []
     for service in get_service_list():
         failback = PythonOperator(
-            task_id=f'failback_{service}',
+            task_id=f'failback_{service["name"]}',
             python_callable=run_python_script,
             op_kwargs={
                 'id': FAILOVER_ID,
                 'action_type': ACTION_TYPE_FAILBACK,
-                'service_name': service,
+                'service_name': service["name"],
                 'hostname': HOSTNAME
             },
             execution_timeout=datetime.timedelta(minutes=10),
         )
         failback_alert = create_slack_alert(
-            f'failback_{service}',
-            f"Failback failed for {service} on {{10 at {{ ts }}",
+            f'failback_{service["name"]}',
+            f"Failback failed for {service['name']} on {{ ds }} at {{ ts }}",
         )
         rollback = PythonOperator(
-            task_id=f'rollback_{service}',
+            task_id=f'rollback_{service["name"]}',
             python_callable=run_python_script,
             op_kwargs={
                 'id': FAILOVER_ID,
                 'action_type': ACTION_TYPE_ROLLBACK,
-                'service_name': service,
+                'service_name': service["name"],
                 'hostname': HOSTNAME
             },
             trigger_rule='one_failed',
@@ -288,8 +288,7 @@ with DAG(
         failback_tasks.append(failback)
         failback_alerts.append(failback_alert)
         rollback_tasks.append(rollback)
-        failback >> failback_alert
-        failback >> rollback
+        failback >> [failback_alert, rollback]
 
     # Delay after failback
     delay3 = DummyOperator(
@@ -307,7 +306,7 @@ with DAG(
     )
 
     # Postcheck alert
-    postcheck_alert = create_slack_alert favoritos
+    postcheck_alert = create_slack_alert(
         'postcheck',
         "Postcheck failed for services on {{ ds }} at {{ ts }}",
     )
